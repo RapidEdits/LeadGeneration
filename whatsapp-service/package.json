@@ -1,0 +1,19 @@
+{
+  "name": "whatsapp-service",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal messaging microservice (Phase 6 wires OpenWA). White-labeled behind ChannelProvider.",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  },
+  "//optionalDependencies": "The default image builds mock-capable (fast, no Chromium). For a live WhatsApp session, install @open-wa/wa-automate (pulls Puppeteer/Chromium) — e.g. `npm install @open-wa/wa-automate` — and rebuild without WHATSAPP_MOCK. The service dynamic-imports it and falls back to mock if absent.",
+  "optionalDependencies": {
+    "@open-wa/wa-automate": "^4.72.0"
+  }
+}

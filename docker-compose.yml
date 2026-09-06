@@ -1,0 +1,136 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-leadgen}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-leadgen_dev_password}
+      POSTGRES_DB: ${POSTGRES_DB:-leadgen}
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-leadgen}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  backend:
+    build:
+      context: ./backend
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      REDIS_URL: redis://redis:6379/0
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      WHATSAPP_SERVICE_URL: http://whatsapp-service:3100
+      WHATSAPP_SERVICE_TOKEN: ${WHATSAPP_SERVICE_TOKEN:-change-me-internal-shared-secret}
+    ports:
+      - "8000:8000"
+    volumes:
+      - ./backend:/app
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  # Worker + beat share the backend image (same models/services/can_send code).
+  worker:
+    build:
+      context: ./backend
+    entrypoint: []                            # skip the API entrypoint's migrate step
+    command: celery -A app.worker.celery_app.celery_app worker --loglevel=info
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+      WHATSAPP_SERVICE_URL: http://whatsapp-service:3100
+      WHATSAPP_SERVICE_TOKEN: ${WHATSAPP_SERVICE_TOKEN:-change-me-internal-shared-secret}
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_started
+
+  beat:
+    build:
+      context: ./backend
+    entrypoint: []
+    command: celery -A app.worker.celery_app.celery_app beat --loglevel=info
+    env_file: .env
+    environment:
+      POSTGRES_HOST: postgres
+      CELERY_BROKER_URL: redis://redis:6379/1
+      CELERY_RESULT_BACKEND: redis://redis:6379/2
+    volumes:
+      - ./backend:/app
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  frontend:
+    build:
+      context: ./frontend
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: ${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+      - /app/.next
+    depends_on:
+      backend:
+        condition: service_started
+
+  whatsapp-service:
+    build:
+      context: ./whatsapp-service
+    environment:
+      PORT: 3100
+      WHATSAPP_SERVICE_TOKEN: ${WHATSAPP_SERVICE_TOKEN:-change-me-internal-shared-secret}
+      # Backend origin the service calls for inbound-message webhooks.
+      BACKEND_INTERNAL_URL: http://backend:8000
+      # Dev/CI: run without a real phone or Chromium. Unset (and build a live
+      # image — see whatsapp-service/Dockerfile) to drive a real WhatsApp session.
+      WHATSAPP_MOCK: ${WHATSAPP_MOCK:-1}
+    ports:
+      - "3100:3100"
+    volumes:
+      - wa_session:/app/session
+
+  # Local dev mail sink: catches all outbound SMTP so email send + open/click/unsubscribe
+  # tracking can be exercised end-to-end with no external mail account.
+  #   SMTP:  mailpit:1025  (no TLS/auth)   ·   Web UI: http://localhost:8025
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ALLOW_INSECURE: "true"
+    ports:
+      - "8025:8025"   # web UI + REST API
+      - "1025:1025"   # SMTP
+    healthcheck:
+      test: ["CMD", "sh", "-c", "wget -q -O - http://localhost:8025/readyz || exit 1"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+volumes:
+  pgdata:
+  wa_session:
