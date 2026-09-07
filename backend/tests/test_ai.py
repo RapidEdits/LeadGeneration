@@ -7,6 +7,7 @@ from typing import Any
 import pytest
 
 from app.services.ai.base import AIResult, AIService, NullAIService
+from app.services.ai.deepseek import DeepSeekAIService
 from app.services.ai.gemma import GemmaAIService
 from tests.conftest import auth_headers, requires_db, signup
 
@@ -31,6 +32,12 @@ def test_parse_json_returns_none_on_garbage():
     assert GemmaAIService._parse_json("not json at all") is None
     assert GemmaAIService._parse_json("") is None
     assert GemmaAIService._parse_json("[1,2,3]") is None  # not an object
+
+
+def test_parse_json_strips_think_block():
+    # A reasoning trace that leaks despite thinking=False must not derail parsing.
+    raw = '<think>the ICP mentions {"x": 1}, so I should weigh that</think>\n{"score": 80}'
+    assert GemmaAIService._parse_json(raw, prefer_keys=("score",)) == {"score": 80}
 
 
 class _StubGemma(GemmaAIService):
@@ -81,6 +88,63 @@ def test_classify_reply_normalizes_unknown_intent():
     svc = _StubGemma('{"intent": "definitely_maybe", "sentiment": "positive", "confidence": 0.9}')
     res = svc.classify_reply("Sounds good, let's talk")
     assert res.output["intent"] == "unknown"
+
+
+class _StubDeepSeek(DeepSeekAIService):
+    """DeepSeekAIService with the network call stubbed to a canned response."""
+
+    def __init__(self, text: str, *, raise_exc: Exception | None = None):
+        super().__init__(api_key="test-key", model_id="deepseek-ai/deepseek-v4-pro-0813",
+                         base_url="https://example.test/v1")
+        self._text = text
+        self._raise = raise_exc
+
+    def _call(self, prompt, *, temperature=0.4, max_tokens=4096):
+        if self._raise:
+            raise self._raise
+        return self._text, 99
+
+
+def test_deepseek_shares_parsing_and_guardrails():
+    svc = _StubDeepSeek('{"score": 300, "verdict": "hot", "rationale": "x"}')
+    res = svc.qualify_lead({"full_name": "Ada", "title": "CTO"}, {})
+    assert res.status == "ok"
+    assert res.output["score"] == 100          # clamped by the shared base
+    assert res.output["verdict"] == "unknown"  # invalid verdict normalized
+    assert res.model == "deepseek-ai/deepseek-v4-pro-0813"
+
+
+def test_deepseek_degrades_on_transport_failure():
+    svc = _StubDeepSeek("", raise_exc=RuntimeError("502 bad gateway"))
+    res = svc.classify_reply("hi")
+    assert res.status == "error" and "502" in (res.error or "")
+
+
+def test_deepseek_extracts_json_after_leaked_reasoning():
+    svc = _StubDeepSeek('<think>let me weigh {"industry": "x"}</think> {"intent": "interested", '
+                        '"sentiment": "positive", "confidence": 0.9}')
+    res = svc.classify_reply("Yes please")
+    assert res.status == "ok" and res.output["intent"] == "interested"
+
+
+def test_factory_selects_by_provider(monkeypatch):
+    import app.services.ai.factory as f
+
+    monkeypatch.setattr(f.settings, "AI_PROVIDER", "auto", raising=False)
+    monkeypatch.setattr(f.settings, "NVIDIA_API_KEY", "nv-key", raising=False)
+    monkeypatch.setattr(f.settings, "GEMINI_API_KEY", "gm-key", raising=False)
+    f.get_ai_service.cache_clear()
+    assert isinstance(f.get_ai_service(), DeepSeekAIService)  # DeepSeek wins in auto
+
+    monkeypatch.setattr(f.settings, "AI_PROVIDER", "gemma", raising=False)
+    f.get_ai_service.cache_clear()
+    assert isinstance(f.get_ai_service(), GemmaAIService)
+
+    monkeypatch.setattr(f.settings, "AI_PROVIDER", "deepseek", raising=False)
+    monkeypatch.setattr(f.settings, "NVIDIA_API_KEY", "", raising=False)
+    f.get_ai_service.cache_clear()
+    assert isinstance(f.get_ai_service(), NullAIService)  # forced provider, key missing
+    f.get_ai_service.cache_clear()
 
 
 def test_null_service_never_fabricates():

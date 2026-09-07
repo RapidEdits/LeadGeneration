@@ -10,6 +10,7 @@ from fastapi.responses import JSONResponse
 from app.api.routes import (
     accounts,
     ai,
+    analytics,
     auth,
     campaigns,
     companies,
@@ -87,6 +88,7 @@ app.include_router(inbox.router, prefix=_p)
 app.include_router(linkedin.router, prefix=_p)
 app.include_router(whatsapp.router, prefix=_p)
 app.include_router(ai.router, prefix=_p)
+app.include_router(analytics.router, prefix=_p)
 # Public tracking endpoints (open pixel, click redirect, unsubscribe) live at the root
 # so outbound-mail URLs stay short; the per-message tracking_id is the capability.
 app.include_router(tracking.router)

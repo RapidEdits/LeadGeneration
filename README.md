@@ -31,8 +31,11 @@ Monorepo with independently deployable services, orchestrated by `docker-compose
   full decision chain lands in Phase 2, enforced in the **worker**, not the UI.
 - **Provider abstraction** — `AIService`, and (later) `EmailProvider` /
   `ChannelProvider` interfaces so models and channels plug in uniformly.
-- **AIService** isolates all Gemma calls (`AI_MODEL`, e.g. `gemma-4-31b-it`, via
-  Google's Generative Language API). Model id is env-driven and swappable. Returns
+- **AIService** isolates every model call behind one contract. Default backend is
+  **DeepSeek** (`DEEPSEEK_MODEL`, via an OpenAI-compatible endpoint — NVIDIA's
+  inference API by default); Gemma (Google Generative Language API) is a drop-in
+  fallback. Provider + model are env-driven (`AI_PROVIDER`); the shared
+  `JsonModelService` base does defensive JSON extraction and always returns
   "unknown" rather than fabricating.
 - **Workspace isolation** — every query is scoped to the caller's workspace; RBAC
   roles are owner / admin / sales / viewer.
@@ -112,9 +115,11 @@ branding is surfaced to end users.
 1. **Foundation** ✅ — auth, DB, nav, Leads/Companies/Settings, dedup, suppression, import
 2. **Campaign engine** ✅ — builder, channel switches, sequences, `can_send` gate, state machine
 3. **Email** ✅ — OAuth, send, tracking, replies, bounces, suppression, deliverability
-4. **Gemma AI** ✅ — scoring, personalization, generation, reply classification, NL search, Copilot
-5. LinkedIn — assisted workflow + status tracking
-6. WhatsApp — OpenWA service, templates, delivery/read status, replies
-7. CRM — pipeline Kanban, tasks, notes, meetings
-8. Analytics — reports, funnel, attribution, AI insights
+4. **AI** ✅ — scoring, personalization, generation, reply classification, NL search, Copilot (DeepSeek / Gemma)
+5. **LinkedIn** ✅ — assisted workflow + status tracking
+6. **WhatsApp** ✅ — OpenWA service, delivery status, replies
+7. **CRM** ✅ — pipeline Kanban, tasks, notes, meetings, lead timeline
+8. **Analytics** ✅ — overview KPIs, funnel, outreach performance, AI insights
 9. Production — security audit, rate limits, monitoring, tests, deployment, docs
+
+> New here? Read **[docs/HOW-TO-GUIDE.md](docs/HOW-TO-GUIDE.md)** for a plain-English walkthrough.

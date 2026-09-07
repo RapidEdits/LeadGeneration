@@ -46,6 +46,19 @@ class Settings(BaseSettings):
     CELERY_RESULT_BACKEND: str = "redis://localhost:6379/2"
 
     # ---- AI ----
+    # Provider selection: "auto" picks DeepSeek when NVIDIA_API_KEY is set, else
+    # Gemma when GEMINI_API_KEY is set, else the null (never-fabricates) service.
+    # Force one with "deepseek" / "gemma" / "null".
+    AI_PROVIDER: str = "auto"
+
+    # DeepSeek via an OpenAI-compatible endpoint (default: NVIDIA's inference API).
+    # Used for every AI task — qualification, email/LinkedIn/follow-up generation,
+    # reply classification, NL search, campaign + analytics insights, Copilot.
+    NVIDIA_API_KEY: str = ""
+    AI_BASE_URL: str = "https://integrate.api.nvidia.com/v1"
+    DEEPSEEK_MODEL: str = "deepseek-ai/deepseek-v4-pro-0813"
+
+    # Gemma via Google Generative Language API (legacy / fallback).
     GEMINI_API_KEY: str = ""
     AI_MODEL: str = "gemma-4-31b-it"
 

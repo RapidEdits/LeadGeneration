@@ -21,7 +21,7 @@ export const NAV: NavItem[] = [
   { title: "Inbox", href: "/inbox", icon: Inbox },
   { title: "LinkedIn Tasks", href: "/linkedin", icon: Linkedin },
   { title: "Sequences", href: "/sequences", icon: Workflow, soon: true },
-  { title: "Analytics", href: "/analytics", icon: BarChart3, soon: true },
+  { title: "Analytics", href: "/analytics", icon: BarChart3 },
   { title: "AI Copilot", href: "/copilot", icon: Sparkles },
   { title: "Integrations", href: "/integrations", icon: Plug, soon: true },
   { title: "Settings", href: "/settings", icon: Settings },

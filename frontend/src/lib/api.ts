@@ -2,6 +2,11 @@ import type {
   AIGeneration,
   AIResult,
   AIStatus,
+  AnalyticsOutreach,
+  AnalyticsOverview,
+  AnalyticsTimeseries,
+  CampaignPerformance,
+  FunnelStage,
   AuthResponse,
   BulkQualifyResponse,
   Campaign,
@@ -318,6 +323,19 @@ export const api = {
   aiCopilot: (question: string) =>
     request<AIResult>("/ai/copilot", { method: "POST", body: JSON.stringify({ question }) }),
   aiGenerations: (limit = 50) => request<AIGeneration[]>(`/ai/generations?limit=${limit}`),
+
+  // Analytics (Phase 8)
+  analyticsOverview: (days = 30) =>
+    request<AnalyticsOverview>(`/analytics/overview?days=${days}`),
+  analyticsFunnel: () => request<{ stages: FunnelStage[] }>("/analytics/funnel"),
+  analyticsOutreach: (days = 30) =>
+    request<AnalyticsOutreach>(`/analytics/outreach?days=${days}`),
+  analyticsTimeseries: (days = 30) =>
+    request<AnalyticsTimeseries>(`/analytics/timeseries?days=${days}`),
+  analyticsCampaigns: () =>
+    request<{ campaigns: CampaignPerformance[] }>("/analytics/campaigns"),
+  analyticsInsights: (days = 30) =>
+    request<{ result: AIResult }>(`/analytics/insights?days=${days}`, { method: "POST" }),
 
   // Suppression
   listSuppression: () => request<SuppressionEntry[]>("/suppression"),

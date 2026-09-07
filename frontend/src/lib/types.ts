@@ -360,6 +360,84 @@ export interface AIGeneration {
   created_at: string;
 }
 
+// ---- Analytics (Phase 8) ----
+export interface AnalyticsOverview {
+  days: number;
+  total_leads: number;
+  new_leads: number;
+  qualified_leads: number;
+  contacted_leads: number;
+  replied_leads: number;
+  won_leads: number;
+  lost_leads: number;
+  active_campaigns: number;
+  messages_sent: number;
+  replies_received: number;
+  reply_rate: number;
+  win_rate: number;
+  open_tasks: number;
+  overdue_tasks: number;
+}
+
+export interface FunnelStage {
+  status: string;
+  label: string;
+  count: number;
+  conversion_from_top: number;
+}
+
+export interface ChannelBreakdown {
+  channel: string;
+  sent: number;
+  opened: number;
+  clicked: number;
+  replied: number;
+  bounced: number;
+  open_rate: number;
+  reply_rate: number;
+  bounce_rate: number;
+}
+
+export interface AnalyticsOutreach {
+  days: number;
+  total_sent: number;
+  total_opened: number;
+  total_clicked: number;
+  total_replied: number;
+  total_bounced: number;
+  open_rate: number;
+  click_rate: number;
+  reply_rate: number;
+  bounce_rate: number;
+  by_channel: ChannelBreakdown[];
+}
+
+export interface TimeseriesPoint {
+  date: string;
+  leads_created: number;
+  messages_sent: number;
+  replies: number;
+}
+
+export interface AnalyticsTimeseries {
+  days: number;
+  points: TimeseriesPoint[];
+}
+
+export interface CampaignPerformance {
+  id: string;
+  name: string;
+  state: string;
+  total_leads: number;
+  messages_sent: number;
+  opened: number;
+  replied: number;
+  bounced: number;
+  reply_rate: number;
+  open_rate: number;
+  bounce_rate: number;
+}
+
 export interface LeadFilter {
   match?: "all" | "any";
   conditions?: FilterCondition[];
