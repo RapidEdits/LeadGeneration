@@ -257,7 +257,7 @@ export default function CopilotPage() {
       >
         {aiStatus && (
           <Badge variant={enabled ? "default" : "outline"}>
-            {enabled ? `Gemma · ${aiStatus.model}` : "AI disabled"}
+            {enabled ? aiStatus.model : "AI disabled"}
           </Badge>
         )}
       </PageHeader>

@@ -213,8 +213,9 @@ class FakeAIService(AIService):
                                 "sort_by": "score", "sort_dir": "desc"})
 
     def copilot(self, question, context=None):
+        self.last_context = context
         return AIResult(status="ok", kind="copilot", model=self.model_id,
-                        output={"answer": f"You have {context.get('total_leads')} leads.",
+                        output={"answer": f"You have {context['totals']['leads']} leads.",
                                 "used_context": True})
 
 
@@ -333,6 +334,10 @@ def test_copilot_uses_workspace_context(client, use_fake_ai):
     r = client.post("/api/v1/ai/copilot", json={"question": "How many leads?"}, headers=h)
     assert r.status_code == 200
     assert "1 leads" in r.json()["output"]["answer"]
+    # the snapshot carries real workspace data, not just counts
+    ctx = use_fake_ai.last_context
+    assert ctx["leads_by_status"]["new"] == 1
+    assert "companies" in ctx and "campaigns" in ctx and "recent_replies" in ctx
 
 
 @requires_db

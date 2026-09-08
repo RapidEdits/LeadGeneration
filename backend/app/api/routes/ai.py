@@ -13,11 +13,14 @@ from app.models.ai import AIGeneration
 from app.models.campaign import Campaign, CampaignLead
 from app.models.enums import (
     AuditAction,
+    Channel,
     LeadStatus,
     MessageDirection,
     SuppressionReason,
+    TaskStatus,
     WorkspaceRole,
 )
+from app.models.crm import Task
 from app.models.lead import Company, Lead
 from app.models.message import Message
 from app.schemas.ai import (
@@ -301,28 +304,158 @@ def analyze_campaign(
     return _result_out(res)
 
 
+_COPILOT_COMPANY_CAP = 80
+_COPILOT_CAMPAIGN_CAP = 30
+_COPILOT_REPLY_CAP = 12
+
+
+def _copilot_context(db: Session, ws_id: str) -> dict:
+    """A bounded, factual snapshot of the workspace for the Copilot to reason over.
+
+    Covers the questions the Ask tab actually gets: pipeline shape, which companies
+    have / haven't been contacted, campaign performance, and the latest replies.
+    """
+    from datetime import datetime, timezone
+
+    from sqlalchemy import distinct, func
+
+    def _count(stmt) -> int:
+        return db.execute(stmt).scalar_one()
+
+    leads_by_status = {
+        s.value: _count(
+            select(func.count()).select_from(Lead).where(
+                Lead.workspace_id == ws_id, Lead.status == s)
+        )
+        for s in LeadStatus
+    }
+
+    # Outbound reach per company (via that company's leads).
+    reach_rows = db.execute(
+        select(
+            Lead.company_id,
+            func.count(distinct(Lead.id)).filter(Message.direction == MessageDirection.outbound),
+            func.count(distinct(Lead.id)).filter(
+                (Message.direction == MessageDirection.outbound)
+                & (Message.channel == Channel.email)
+            ),
+        )
+        .select_from(Lead)
+        .join(Message, Message.lead_id == Lead.id, isouter=True)
+        .where(Lead.workspace_id == ws_id)
+        .group_by(Lead.company_id)
+    ).all()
+    contacted_by_company = {r[0]: (r[1], r[2]) for r in reach_rows}
+
+    company_rows = db.execute(
+        select(Company.id, Company.name, Company.industry,
+               func.count(Lead.id).label("lead_count"))
+        .select_from(Company)
+        .join(Lead, Lead.company_id == Company.id, isouter=True)
+        .where(Company.workspace_id == ws_id)
+        .group_by(Company.id, Company.name, Company.industry)
+        .order_by(func.count(Lead.id).desc(), Company.name)
+        .limit(_COPILOT_COMPANY_CAP)
+    ).all()
+    companies = []
+    for cid, name, industry, lead_count in company_rows:
+        contacted, emailed = contacted_by_company.get(cid, (0, 0))
+        companies.append({
+            "name": name,
+            "industry": industry,
+            "leads": lead_count,
+            "leads_emailed": emailed,
+            "leads_contacted_any_channel": contacted,
+            "emailed": emailed > 0,
+            "contacted": contacted > 0,
+        })
+    total_companies = _count(
+        select(func.count()).select_from(Company).where(Company.workspace_id == ws_id)
+    )
+
+    camp_rows = db.execute(
+        select(Campaign.id, Campaign.name, Campaign.state)
+        .where(Campaign.workspace_id == ws_id)
+        .order_by(Campaign.created_at.desc())
+        .limit(_COPILOT_CAMPAIGN_CAP)
+    ).all()
+    campaigns = []
+    for cid, name, state in camp_rows:
+        members = _count(
+            select(func.count()).select_from(CampaignLead).where(CampaignLead.campaign_id == cid)
+        )
+        sent = _count(
+            select(func.count()).select_from(Message).where(
+                Message.campaign_id == cid, Message.direction == MessageDirection.outbound)
+        )
+        replies = _count(
+            select(func.count()).select_from(Message).where(
+                Message.campaign_id == cid, Message.direction == MessageDirection.inbound)
+        )
+        campaigns.append({
+            "name": name, "state": getattr(state, "value", state),
+            "leads": members, "messages_sent": sent, "replies": replies,
+        })
+
+    reply_rows = db.execute(
+        select(Message.body, Message.subject, Message.channel, Message.created_at,
+               Lead.full_name, Company.name)
+        .select_from(Message)
+        .join(Lead, Lead.id == Message.lead_id, isouter=True)
+        .join(Company, Company.id == Lead.company_id, isouter=True)
+        .where(Message.workspace_id == ws_id, Message.direction == MessageDirection.inbound)
+        .order_by(Message.created_at.desc())
+        .limit(_COPILOT_REPLY_CAP)
+    ).all()
+    recent_replies = [
+        {
+            "from": full_name or "unknown",
+            "company": company_name,
+            "channel": getattr(channel, "value", channel),
+            "at": created_at.isoformat() if created_at else None,
+            "preview": ((body or subject or "").strip()[:200]),
+        }
+        for body, subject, channel, created_at, full_name, company_name in reply_rows
+    ]
+
+    now = datetime.now(timezone.utc)
+    open_tasks = _count(
+        select(func.count()).select_from(Task).where(
+            Task.workspace_id == ws_id, Task.status == TaskStatus.open)
+    )
+    overdue_tasks = _count(
+        select(func.count()).select_from(Task).where(
+            Task.workspace_id == ws_id, Task.status == TaskStatus.open,
+            Task.due_at.is_not(None), Task.due_at < now)
+    )
+
+    return {
+        "totals": {
+            "leads": sum(leads_by_status.values()),
+            "companies": total_companies,
+            "campaigns": len(camp_rows),
+        },
+        "leads_by_status": leads_by_status,
+        "companies_note": (
+            f"showing the {len(companies)} companies with the most leads"
+            + (f" of {total_companies} total" if total_companies > len(companies) else "")
+            + "; 'emailed'/'contacted' mean at least one lead there has received an outbound "
+            "email / outbound message on any channel"
+        ),
+        "companies": companies,
+        "campaigns": campaigns,
+        "recent_replies": recent_replies,
+        "tasks": {"open": open_tasks, "overdue": overdue_tasks},
+    }
+
+
 @router.post("/copilot", response_model=AIResultOut)
 def copilot(
     payload: CopilotRequest,
     ctx: WorkspaceContext = Depends(get_workspace_context),
     db: Session = Depends(get_db),
 ) -> AIResultOut:
-    from sqlalchemy import func
-
-    context = {
-        "total_leads": db.execute(
-            select(func.count()).select_from(Lead).where(Lead.workspace_id == ctx.workspace_id)
-        ).scalar_one(),
-        "total_campaigns": db.execute(
-            select(func.count()).select_from(Campaign).where(Campaign.workspace_id == ctx.workspace_id)
-        ).scalar_one(),
-        "leads_by_status": {
-            s.value: db.execute(
-                select(func.count()).select_from(Lead).where(
-                    Lead.workspace_id == ctx.workspace_id, Lead.status == s)
-            ).scalar_one() for s in LeadStatus
-        },
-    }
+    context = _copilot_context(db, ctx.workspace_id)
     res = get_ai_service().copilot(payload.question, context)
     ai_log.record(db, res, workspace_id=ctx.workspace_id, created_by=ctx.user.id)
     db.commit()
