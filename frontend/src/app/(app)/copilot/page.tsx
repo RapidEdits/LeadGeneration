@@ -19,6 +19,19 @@ interface ChatTurn {
   status?: AIResult["status"];
 }
 
+// Chat history is kept per-browser so it survives navigation and reloads.
+const CHAT_STORAGE_KEY = "copilot.ask.history.v1";
+
+function loadHistory(): ChatTurn[] {
+  try {
+    const raw = window.localStorage.getItem(CHAT_STORAGE_KEY);
+    const parsed = raw ? JSON.parse(raw) : [];
+    return Array.isArray(parsed) ? (parsed as ChatTurn[]) : [];
+  } catch {
+    return [];
+  }
+}
+
 function DisabledBanner() {
   return (
     <Card className="mb-4 border-warning/40 bg-warning/5">
@@ -40,17 +53,49 @@ function DisabledBanner() {
 
 function AskTab({ enabled }: { enabled: boolean }) {
   const [turns, setTurns] = React.useState<ChatTurn[]>([]);
+  const [hydrated, setHydrated] = React.useState(false);
   const [q, setQ] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const endRef = React.useRef<HTMLDivElement>(null);
+
+  // Restore any prior conversation once, on mount (avoids an SSR hydration mismatch).
+  React.useEffect(() => {
+    setTurns(loadHistory());
+    setHydrated(true);
+  }, []);
+
+  React.useEffect(() => {
+    if (!hydrated) return;
+    try {
+      window.localStorage.setItem(CHAT_STORAGE_KEY, JSON.stringify(turns));
+    } catch {
+      /* storage unavailable — chat just won't persist */
+    }
+  }, [turns, hydrated]);
 
   React.useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns]);
 
+  const clearChat = () => {
+    setTurns([]);
+    setQ("");
+    try {
+      window.localStorage.removeItem(CHAT_STORAGE_KEY);
+    } catch {
+      /* ignore */
+    }
+  };
+
   const ask = async () => {
     const question = q.trim();
     if (!question) return;
+    // Slash commands are handled locally, never sent to the model.
+    if (/^\/clear\b/i.test(question) || /^\/reset\b/i.test(question)) {
+      clearChat();
+      toast.success("Chat cleared");
+      return;
+    }
     setTurns((t) => [...t, { role: "user", text: question }]);
     setQ("");
     setBusy(true);
@@ -71,6 +116,13 @@ function AskTab({ enabled }: { enabled: boolean }) {
 
   return (
     <div className="flex h-[calc(100vh-16rem)] flex-col">
+      {turns.length > 0 && (
+        <div className="mb-2 flex justify-end">
+          <Button variant="ghost" size="sm" className="h-7 text-xs text-muted-foreground" onClick={clearChat}>
+            Clear chat
+          </Button>
+        </div>
+      )}
       <div className="flex-1 space-y-4 overflow-y-auto pr-1">
         {turns.length === 0 && (
           <div className="flex flex-col items-center gap-3 py-16 text-center">
@@ -80,6 +132,10 @@ function AskTab({ enabled }: { enabled: boolean }) {
             <p className="max-w-md text-sm text-muted-foreground">
               Ask about your workspace — lead counts, pipeline status, where to focus. The Copilot
               answers only from your data and says so when it can&apos;t.
+            </p>
+            <p className="text-xs text-muted-foreground/70">
+              Your chat stays here as you move around the app. Type{" "}
+              <code className="rounded bg-muted px-1 py-0.5">/clear</code> to reset it.
             </p>
             <div className="flex flex-wrap justify-center gap-2">
               {["How many leads have replied?", "What should I focus on next?", "Summarize my pipeline"].map(
@@ -139,7 +195,7 @@ function AskTab({ enabled }: { enabled: boolean }) {
         <Input
           value={q}
           onChange={(e) => setQ(e.target.value)}
-          placeholder={enabled ? "Ask the Copilot…" : "AI disabled — answers will be 'unknown'"}
+          placeholder={enabled ? "Ask the Copilot…  (/clear to reset)" : "AI disabled — answers will be 'unknown'"}
           disabled={busy}
         />
         <Button type="submit" disabled={busy || !q.trim()}>
