@@ -8,6 +8,7 @@ from sqlalchemy import select
 from app.models.campaign import Campaign, CampaignLead
 from app.models.enums import CampaignLeadState, CampaignState
 from app.services import engine
+from app.services.can_send import can_send
 from tests.conftest import auth_headers, requires_db, signup
 
 
@@ -156,6 +157,95 @@ def test_paused_campaign_not_processed(client, db):
     assert out == {}  # nothing processed while paused
     msgs = client.get(f"/api/v1/campaigns/{cid}/messages", headers=h).json()
     assert len(msgs) == 0
+
+
+@requires_db
+def test_leads_added_to_active_campaign_are_scheduled(client, db):
+    """Leads added AFTER launch must be scheduled and sent, not left pending forever."""
+    token, ws = signup(client, email="addactive@example.com")
+    h = auth_headers(token, ws)
+    (orig,) = _make_leads(client, h, ["orig@x.com"])
+    body = _campaign_body()
+    body["steps"][1]["delay_days"] = 5  # keep the campaign active after step 0
+    cid = client.post("/api/v1/campaigns", headers=h, json=body).json()["id"]
+    client.post(f"/api/v1/campaigns/{cid}/leads", headers=h, json={"lead_ids": [orig]})
+    client.post(f"/api/v1/campaigns/{cid}/launch", headers=h)
+
+    now = datetime.now(timezone.utc)
+    engine.tick(db, now=now)  # orig sends step 0, now waiting 5d on step 1 → campaign stays active
+
+    # Add a new lead while the campaign is already running.
+    (late,) = _make_leads(client, h, ["late@x.com"])
+    assert client.post(f"/api/v1/campaigns/{cid}/leads", headers=h,
+                       json={"lead_ids": [late]}).json()["added"] == 1
+
+    db.expire_all()
+    late_member = db.execute(
+        select(CampaignLead).where(CampaignLead.campaign_id == cid, CampaignLead.lead_id == late)
+    ).scalar_one()
+    assert late_member.state == CampaignLeadState.active  # not left pending
+    assert late_member.next_action_at is not None
+
+    out = engine.tick(db, now=now + timedelta(seconds=1))
+    assert out.get("sent") == 1  # the late-added lead sends
+
+
+@requires_db
+def test_leads_added_while_paused_send_on_resume(client, db):
+    """Leads added while paused are activated on resume (not stuck pending)."""
+    token, ws = signup(client, email="addpaused@example.com")
+    h = auth_headers(token, ws)
+    (orig,) = _make_leads(client, h, ["p-orig@x.com"])
+    body = _campaign_body(delay=0)
+    body["steps"] = [{"channel": "email", "delay_days": 0, "subject": "Hi", "body_template": "Hi"}]
+    cid = client.post("/api/v1/campaigns", headers=h, json=body).json()["id"]
+    client.post(f"/api/v1/campaigns/{cid}/leads", headers=h, json={"lead_ids": [orig]})
+    client.post(f"/api/v1/campaigns/{cid}/launch", headers=h)
+    client.post(f"/api/v1/campaigns/{cid}/pause", headers=h)
+
+    (late,) = _make_leads(client, h, ["p-late@x.com"])
+    client.post(f"/api/v1/campaigns/{cid}/leads", headers=h, json={"lead_ids": [late]})
+    client.post(f"/api/v1/campaigns/{cid}/resume", headers=h)
+
+    db.expire_all()
+    late_member = db.execute(
+        select(CampaignLead).where(CampaignLead.campaign_id == cid, CampaignLead.lead_id == late)
+    ).scalar_one()
+    assert late_member.state == CampaignLeadState.active
+    assert late_member.next_action_at is not None
+
+
+@requires_db
+def test_frequency_cap_is_configurable(client, db, monkeypatch):
+    """The cross-campaign 24h frequency cap is honored by default but can be disabled
+    by setting FREQUENCY_CAP_HOURS=0 (so re-testing the same address isn't blocked)."""
+    token, ws = signup(client, email="freqcap@example.com")
+    h = auth_headers(token, ws)
+    (lid,) = _make_leads(client, h, ["freq@x.com"])
+    single = [{"channel": "email", "delay_days": 0, "subject": "Hi", "body_template": "Hi"}]
+
+    # Campaign A contacts the lead.
+    bodyA = _campaign_body(name="A"); bodyA["steps"] = single
+    cidA = client.post("/api/v1/campaigns", headers=h, json=bodyA).json()["id"]
+    client.post(f"/api/v1/campaigns/{cidA}/leads", headers=h, json={"lead_ids": [lid]})
+    client.post(f"/api/v1/campaigns/{cidA}/launch", headers=h)
+    engine.tick(db, now=datetime.now(timezone.utc))  # A sends to the lead (simulated)
+
+    # Campaign B (different campaign, same lead) — evaluate the gate directly.
+    bodyB = _campaign_body(name="B"); bodyB["steps"] = single
+    cidB = client.post("/api/v1/campaigns", headers=h, json=bodyB).json()["id"]
+    db.expire_all()
+    campB = db.get(Campaign, cidB)
+
+    # Default 24h cap → blocked by frequency.
+    monkeypatch.setattr("app.services.can_send.settings.FREQUENCY_CAP_HOURS", 24)
+    d1 = can_send(db, campaign=campB, channel="email", lead_value="freq@x.com", lead_id=lid)
+    assert d1.checks["frequency_ok"] is False
+
+    # Cap disabled → allowed again.
+    monkeypatch.setattr("app.services.can_send.settings.FREQUENCY_CAP_HOURS", 0)
+    d2 = can_send(db, campaign=campB, channel="email", lead_value="freq@x.com", lead_id=lid)
+    assert d2.checks["frequency_ok"] is True
 
 
 @requires_db

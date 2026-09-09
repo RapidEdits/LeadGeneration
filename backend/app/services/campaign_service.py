@@ -56,8 +56,16 @@ def set_steps(db: Session, campaign: Campaign, steps_in: list[dict]) -> None:
     db.flush()
 
 
-def add_leads(db: Session, campaign: Campaign, lead_ids: list[str]) -> int:
-    """Add leads as pending members (idempotent; workspace-scoped)."""
+def add_leads(
+    db: Session, campaign: Campaign, lead_ids: list[str], *, now: datetime | None = None
+) -> int:
+    """Add leads as members (idempotent; workspace-scoped).
+
+    New leads join as `pending`. If the campaign is already `active`, they are
+    seeded immediately so they actually send — otherwise only launch/resume would
+    ever schedule them and a lead added mid-flight would sit pending forever.
+    """
+    now = now or datetime.now(timezone.utc)
     existing = set(db.execute(
         select(CampaignLead.lead_id).where(CampaignLead.campaign_id == campaign.id)
     ).scalars().all())
@@ -66,23 +74,46 @@ def add_leads(db: Session, campaign: Campaign, lead_ids: list[str]) -> int:
         select(Lead.id).where(Lead.workspace_id == campaign.workspace_id, Lead.id.in_(lead_ids))
     ).scalars().all()
 
-    added = 0
+    new_members: list[CampaignLead] = []
     for lid in valid:
         if lid in existing:
             continue
-        db.add(CampaignLead(
+        member = CampaignLead(
             campaign_id=campaign.id,
             lead_id=lid,
             workspace_id=campaign.workspace_id,
             state=CampaignLeadState.pending,
-        ))
-        added += 1
+        )
+        db.add(member)
+        new_members.append(member)
     db.flush()
-    return added
+
+    if campaign.state == CampaignState.active and new_members:
+        _seed_members(new_members, _enabled_steps(campaign), now)
+        db.flush()
+    return len(new_members)
 
 
 def _enabled_steps(campaign: Campaign) -> list[CampaignStep]:
     return [s for s in sorted(campaign.steps, key=lambda x: x.order_index) if s.enabled]
+
+
+def _seed_members(
+    members: list[CampaignLead], steps: list[CampaignStep], now: datetime
+) -> None:
+    """Activate members and schedule them at the first enabled step.
+
+    Shared by launch (initial seed), add_leads (leads added to a running campaign),
+    and resume (leads added while paused). No-op if the sequence has no enabled steps.
+    """
+    if not steps:
+        return
+    first_delay = steps[0].delay_days
+    for m in members:
+        m.state = CampaignLeadState.active
+        m.current_step = 0
+        m.attempts = 0
+        m.next_action_at = now + timedelta(days=first_delay)
 
 
 def launch(db: Session, campaign: Campaign, *, now: datetime | None = None) -> Campaign:
@@ -112,12 +143,7 @@ def launch(db: Session, campaign: Campaign, *, now: datetime | None = None) -> C
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "Campaign has no leads")
 
     _assert_transition(campaign.state, CampaignState.active)
-    first_delay = steps[0].delay_days
-    for m in members:
-        m.state = CampaignLeadState.active
-        m.current_step = 0
-        m.attempts = 0
-        m.next_action_at = now + timedelta(days=first_delay)
+    _seed_members(members, steps, now)
 
     campaign.state = CampaignState.active
     campaign.started_at = campaign.started_at or now
@@ -132,13 +158,23 @@ def pause(db: Session, campaign: Campaign) -> Campaign:
     return campaign
 
 
-def resume(db: Session, campaign: Campaign) -> Campaign:
+def resume(db: Session, campaign: Campaign, *, now: datetime | None = None) -> Campaign:
     if campaign.state != CampaignState.paused:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             f"Only a paused campaign can be resumed (is {campaign.state.value})",
         )
+    now = now or datetime.now(timezone.utc)
     campaign.state = CampaignState.active
+    # Seed any leads added while paused (still pending) so they start sending.
+    pending = db.execute(
+        select(CampaignLead).where(
+            CampaignLead.campaign_id == campaign.id,
+            CampaignLead.state == CampaignLeadState.pending,
+        )
+    ).scalars().all()
+    if pending:
+        _seed_members(pending, _enabled_steps(campaign), now)
     db.flush()
     return campaign
 

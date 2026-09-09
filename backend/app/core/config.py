@@ -71,6 +71,11 @@ class Settings(BaseSettings):
     APP_BASE_URL: str = "http://localhost:3000"
     EMAIL_TRACKING_ENABLED: bool = True
     INBOUND_POLL_ENABLED: bool = True
+
+    # Cross-campaign frequency cap: don't contact the same lead on the same channel
+    # more than once within this many hours across DIFFERENT campaigns. Set to 0 to
+    # disable the cap entirely (handy in dev when re-testing with the same addresses).
+    FREQUENCY_CAP_HOURS: int = 24
     # Default "From" identity when a connected account doesn't specify one.
     DEFAULT_FROM_NAME: str = "Lead Generator"
 

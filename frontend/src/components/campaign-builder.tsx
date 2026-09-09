@@ -12,7 +12,7 @@ import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { Badge } from "@/components/ui/badge";
 import { api, ApiError } from "@/lib/api";
-import type { Channel, ChannelConfig, CampaignStep } from "@/lib/types";
+import type { Campaign, Channel, ChannelConfig, CampaignStep } from "@/lib/types";
 
 const CHANNELS: { id: Channel; label: string; icon: React.ElementType; phase: string }[] = [
   { id: "email", label: "Email", icon: Mail, phase: "sends in Phase 3" },
@@ -20,26 +20,78 @@ const CHANNELS: { id: Channel; label: string; icon: React.ElementType; phase: st
   { id: "whatsapp", label: "WhatsApp", icon: MessageCircle, phase: "OpenWA send" },
 ];
 
-export function CampaignBuilder({ trigger }: { trigger: React.ReactNode }) {
+const DEFAULT_CHANNELS: Record<string, ChannelConfig> = { email: { enabled: true, daily_limit: 50 } };
+const DEFAULT_STEPS: CampaignStep[] = [
+  { channel: "email", delay_days: 0, subject: "", body_template: "", enabled: true },
+];
+
+export function CampaignBuilder({
+  trigger,
+  campaign,
+  onSaved,
+  open: openProp,
+  onOpenChange,
+}: {
+  trigger: React.ReactNode;
+  /** When set, the dialog edits this campaign instead of creating a new one. */
+  campaign?: Campaign;
+  /** Called after a successful edit save (edit mode only). */
+  onSaved?: () => void;
+  /** Optional controlled open state; when provided the parent owns open/close. */
+  open?: boolean;
+  onOpenChange?: (v: boolean) => void;
+}) {
   const router = useRouter();
-  const [open, setOpen] = React.useState(false);
+  const isEdit = !!campaign;
+  const controlled = openProp !== undefined;
+  const [openState, setOpenState] = React.useState(false);
+  const open = controlled ? openProp : openState;
+  const setOpen = (v: boolean) => { onOpenChange?.(v); if (!controlled) setOpenState(v); };
   const [busy, setBusy] = React.useState(false);
 
   const [name, setName] = React.useState("");
   const [description, setDescription] = React.useState("");
   const [testMode, setTestMode] = React.useState(true);
-  const [channels, setChannels] = React.useState<Record<string, ChannelConfig>>({
-    email: { enabled: true, daily_limit: 50 },
-  });
-  const [steps, setSteps] = React.useState<CampaignStep[]>([
-    { channel: "email", delay_days: 0, subject: "", body_template: "", enabled: true },
-  ]);
+  const [channels, setChannels] = React.useState<Record<string, ChannelConfig>>(DEFAULT_CHANNELS);
+  const [steps, setSteps] = React.useState<CampaignStep[]>(DEFAULT_STEPS);
 
-  const reset = () => {
+  // Load the campaign's current values into the form each time the edit dialog opens.
+  const hydrate = React.useCallback(() => {
+    if (!campaign) return;
+    setName(campaign.name);
+    setDescription(campaign.description ?? "");
+    setTestMode(campaign.test_mode);
+    setChannels(
+      Object.keys(campaign.channels).length ? structuredClone(campaign.channels) : DEFAULT_CHANNELS,
+    );
+    setSteps(
+      campaign.steps.length
+        ? campaign.steps.map((s) => ({
+            channel: s.channel,
+            delay_days: s.delay_days,
+            subject: s.subject ?? "",
+            body_template: s.body_template ?? "",
+            ai_prompt: s.ai_prompt ?? "",
+            enabled: s.enabled,
+          }))
+        : structuredClone(DEFAULT_STEPS),
+    );
+  }, [campaign]);
+
+  const reset = React.useCallback(() => {
+    if (isEdit) { hydrate(); return; }
     setName(""); setDescription(""); setTestMode(true);
-    setChannels({ email: { enabled: true, daily_limit: 50 } });
-    setSteps([{ channel: "email", delay_days: 0, subject: "", body_template: "", enabled: true }]);
-  };
+    setChannels(structuredClone(DEFAULT_CHANNELS));
+    setSteps(structuredClone(DEFAULT_STEPS));
+  }, [isEdit, hydrate]);
+
+  // Load fresh values whenever the dialog opens (works for both trigger and
+  // programmatic opens, e.g. the pause-then-edit flow on active campaigns).
+  const prevOpen = React.useRef(false);
+  React.useEffect(() => {
+    if (open && !prevOpen.current) reset();
+    prevOpen.current = open;
+  }, [open, reset]);
 
   const toggleChannel = (id: Channel, enabled: boolean) =>
     setChannels((c) => ({ ...c, [id]: { ...(c[id] ?? {}), enabled } }));
@@ -63,29 +115,43 @@ export function CampaignBuilder({ trigger }: { trigger: React.ReactNode }) {
 
     setBusy(true);
     try {
-      const c = await api.createCampaign({
+      const body = {
         name, description: description || undefined, test_mode: testMode,
-        approval_mode: "auto", channels, steps,
-      });
-      toast.success("Campaign created");
-      setOpen(false);
-      reset();
-      router.push(`/campaigns/${c.id}`);
+        approval_mode: "auto" as const, channels, steps,
+      };
+      if (isEdit) {
+        await api.updateCampaign(campaign!.id, body);
+        toast.success("Campaign updated");
+        onSaved?.();
+        setOpen(false);
+      } else {
+        const c = await api.createCampaign(body);
+        toast.success("Campaign created");
+        setOpen(false);
+        reset();
+        router.push(`/campaigns/${c.id}`);
+      }
     } catch (err) {
-      toast.error(err instanceof ApiError ? err.message : "Could not create campaign");
+      toast.error(
+        err instanceof ApiError
+          ? err.message
+          : `Could not ${isEdit ? "update" : "create"} campaign`,
+      );
     } finally {
       setBusy(false);
     }
   };
 
   return (
-    <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) reset(); }}>
+    <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{trigger}</DialogTrigger>
       <DialogContent className="max-h-[90vh] max-w-3xl overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>New campaign</DialogTitle>
+          <DialogTitle>{isEdit ? "Edit campaign" : "New campaign"}</DialogTitle>
           <DialogDescription>
-            Define the channels and the message sequence. Leads are added on the next screen.
+            {isEdit
+              ? "Update the channels and message sequence. Changes apply to future sends."
+              : "Define the channels and the message sequence. Leads are added on the next screen."}
           </DialogDescription>
         </DialogHeader>
 
@@ -231,7 +297,9 @@ export function CampaignBuilder({ trigger }: { trigger: React.ReactNode }) {
 
         <DialogFooter>
           <Button variant="outline" onClick={() => setOpen(false)}>Cancel</Button>
-          <Button onClick={submit} disabled={busy}>{busy ? "Creating…" : "Create campaign"}</Button>
+          <Button onClick={submit} disabled={busy}>
+            {busy ? (isEdit ? "Saving…" : "Creating…") : (isEdit ? "Save changes" : "Create campaign")}
+          </Button>
         </DialogFooter>
       </DialogContent>
     </Dialog>

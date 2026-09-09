@@ -26,6 +26,7 @@ from app.models.enums import (
     MessageDirection,
     MessageStatus,
 )
+from app.core.config import settings
 from app.models.message import Message
 from app.models.outreach import ConnectedAccount
 from app.services.suppression import is_suppressed
@@ -89,10 +90,16 @@ def _sent_today(db: Session, *, campaign_id: str, channel: str) -> int:
 
 
 def _contacted_lead_today(db: Session, *, lead_id: str, channel: str, exclude_campaign_id: str) -> bool:
-    """Cross-campaign frequency cap: has this lead been contacted on `channel` in the
-    last 24h by a DIFFERENT campaign? Intra-campaign cadence is governed by step delays,
-    so the current campaign's own sends are excluded."""
-    since = datetime.now(timezone.utc) - timedelta(hours=24)
+    """Cross-campaign frequency cap: has this lead been contacted on `channel` within
+    the configured window (FREQUENCY_CAP_HOURS) by a DIFFERENT campaign? Intra-campaign
+    cadence is governed by step delays, so the current campaign's own sends are excluded.
+
+    A window of 0 (or less) disables the cap — no lead is ever considered over-contacted.
+    """
+    cap_hours = settings.FREQUENCY_CAP_HOURS
+    if cap_hours <= 0:
+        return False
+    since = datetime.now(timezone.utc) - timedelta(hours=cap_hours)
     row = db.execute(
         select(Message.id).where(
             Message.lead_id == lead_id,

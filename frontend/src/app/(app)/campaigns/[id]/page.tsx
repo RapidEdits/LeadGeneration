@@ -4,7 +4,7 @@ import { useParams, useRouter } from "next/navigation";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   ArrowLeft, Play, Pause, CheckCircle2, RotateCcw, UserPlus, Users, Send,
-  FlaskConical, Mail, Linkedin, MessageCircle, Clock, Sparkles, Loader2,
+  FlaskConical, Mail, Linkedin, MessageCircle, Clock, Sparkles, Loader2, Pencil,
 } from "lucide-react";
 import type { AIResult } from "@/lib/types";
 import { toast } from "sonner";
@@ -16,7 +16,11 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
 } from "@/components/ui/table";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
+} from "@/components/ui/dialog";
 import { CampaignStateBadge } from "@/components/campaign-state-badge";
+import { CampaignBuilder } from "@/components/campaign-builder";
 import { AddLeadsToCampaign } from "@/components/add-leads-to-campaign";
 import { api, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
@@ -30,6 +34,29 @@ const MEMBER_VARIANT: Record<CampaignLeadState, "default" | "secondary" | "succe
   pending: "secondary", active: "default", replied: "success", completed: "success",
   bounced: "destructive", failed: "destructive", skipped: "outline", awaiting_action: "warning",
 };
+
+// Raw engine block/skip codes → plain English shown in the Note column.
+const REASON_LABEL: Record<string, string> = {
+  frequency_ok: "Waiting — this lead was contacted too recently",
+  account_connected: "Waiting for a connected sending account",
+  rate_limit_ok: "Daily send limit reached — resumes later",
+  schedule_ok: "Outside the campaign's sending window",
+  approval_satisfied: "Waiting for approval before sending",
+  not_suppressed: "Skipped — address is suppressed (unsubscribed or bounced)",
+  suppressed: "Skipped — address is suppressed (unsubscribed or bounced)",
+  send_failed: "Last send failed — retrying",
+  awaiting_action: "Waiting for a manual send (LinkedIn)",
+  bounced: "Bounced — stopped contacting this lead",
+  blocked: "Blocked by a send rule",
+  replied: "Lead replied — sequence stopped",
+};
+
+/** Human-readable explanation of where a member stands. */
+function memberNote(m: { state: CampaignLeadState; last_reason: string | null }): string {
+  if (m.last_reason) return REASON_LABEL[m.last_reason] ?? m.last_reason;
+  if (m.state === "pending") return "Not scheduled yet — launch or resume the campaign to start";
+  return "—";
+}
 
 export default function CampaignDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -72,6 +99,66 @@ export default function CampaignDetailPage() {
     }
   };
 
+  // --- Edit orchestration ---
+  // An active campaign must be paused before it can be edited (backend rule),
+  // then resumed after saving so it goes back to running on its own.
+  const [editOpen, setEditOpen] = React.useState(false);
+  const [confirmPause, setConfirmPause] = React.useState(false);
+  const autoPaused = React.useRef(false);
+  const justSaved = React.useRef(false);
+
+  const openEditor = () => { autoPaused.current = false; setEditOpen(true); };
+
+  const startEdit = () => {
+    if (campaign.data?.state === "active") setConfirmPause(true);
+    else openEditor();
+  };
+
+  const confirmPauseAndEdit = async () => {
+    try {
+      await api.campaignTransition(id, "pause");
+      autoPaused.current = true;
+      setConfirmPause(false);
+      qc.invalidateQueries({ queryKey: ["campaign", id] });
+      setEditOpen(true);
+    } catch (err) {
+      toast.error(err instanceof ApiError ? err.message : "Could not pause campaign");
+    }
+  };
+
+  const resumeIfAutoPaused = async (savedMsg?: string) => {
+    if (!autoPaused.current) return;
+    autoPaused.current = false;
+    try {
+      await api.campaignTransition(id, "resume");
+      if (savedMsg) toast.success(savedMsg);
+    } catch {
+      toast.error(
+        savedMsg
+          ? "Saved, but the campaign stayed paused — resume it manually."
+          : "Could not resume — the campaign stayed paused.",
+      );
+    } finally {
+      refresh();
+    }
+  };
+
+  const handleEditSaved = () => {
+    justSaved.current = true;
+    resumeIfAutoPaused("Campaign resumed");
+    refresh();
+  };
+
+  const handleEditOpenChange = (v: boolean) => {
+    setEditOpen(v);
+    if (!v) {
+      // Closed. If it was a save, handleEditSaved already dealt with resume.
+      if (justSaved.current) { justSaved.current = false; return; }
+      // Cancelled after we auto-paused → put it back to running.
+      resumeIfAutoPaused();
+    }
+  };
+
   const c = campaign.data;
 
   if (campaign.isLoading || !c) {
@@ -90,6 +177,8 @@ export default function CampaignDetailPage() {
   const canPause = c.state === "active";
   const canResume = c.state === "paused";
   const canComplete = c.state === "active" || c.state === "paused";
+  // Backend permits edits in draft/scheduled/paused; active is allowed via pause-then-resume.
+  const canEdit = ["draft", "scheduled", "paused", "active"].includes(c.state);
 
   return (
     <div>
@@ -107,6 +196,11 @@ export default function CampaignDetailPage() {
           {c.description && <p className="text-sm text-muted-foreground">{c.description}</p>}
         </div>
         <div className="flex items-center gap-2">
+          {canEdit && (
+            <Button variant="outline" onClick={startEdit}>
+              <Pencil className="h-4 w-4" /> Edit
+            </Button>
+          )}
           <Button variant="outline" onClick={analyze} disabled={analyzing}>
             {analyzing ? <Loader2 className="h-4 w-4 animate-spin" /> : <Sparkles className="h-4 w-4" />}
             Analyze with AI
@@ -245,7 +339,9 @@ export default function CampaignDetailPage() {
                     <TableCell className="text-muted-foreground">
                       {m.next_action_at ? new Date(m.next_action_at).toLocaleString() : "—"}
                     </TableCell>
-                    <TableCell className="text-xs text-muted-foreground">{m.last_reason ?? "—"}</TableCell>
+                    <TableCell className="text-xs text-muted-foreground" title={m.last_reason ?? undefined}>
+                      {memberNote(m)}
+                    </TableCell>
                   </TableRow>
                 ))}
               </TableBody>
@@ -298,6 +394,32 @@ export default function CampaignDetailPage() {
           )}
         </TabsContent>
       </Tabs>
+
+      {/* Edit dialog (reuses the campaign builder in edit mode) */}
+      <CampaignBuilder
+        campaign={c}
+        open={editOpen}
+        onOpenChange={handleEditOpenChange}
+        onSaved={handleEditSaved}
+        trigger={<span className="hidden" />}
+      />
+
+      {/* Confirm pause-to-edit for a running campaign */}
+      <Dialog open={confirmPause} onOpenChange={setConfirmPause}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Pause to edit?</DialogTitle>
+            <DialogDescription>
+              This campaign is running. It&apos;ll be paused while you edit and resume
+              automatically once you save your changes.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setConfirmPause(false)}>Cancel</Button>
+            <Button onClick={confirmPauseAndEdit}><Pause className="h-4 w-4" /> Pause &amp; edit</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
