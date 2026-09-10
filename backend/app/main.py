@@ -18,6 +18,8 @@ from app.api.routes import (
     health,
     imports,
     inbox,
+    prospecting,
+    email_analytics,
     leads,
     linkedin,
     suppression,
@@ -85,6 +87,8 @@ app.include_router(suppression.router, prefix=_p)
 app.include_router(imports.router, prefix=_p)
 app.include_router(accounts.router, prefix=_p)
 app.include_router(inbox.router, prefix=_p)
+app.include_router(prospecting.router, prefix=_p)
+app.include_router(email_analytics.router, prefix=_p)
 app.include_router(linkedin.router, prefix=_p)
 app.include_router(whatsapp.router, prefix=_p)
 app.include_router(ai.router, prefix=_p)

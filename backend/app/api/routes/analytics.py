@@ -45,6 +45,7 @@ from app.schemas.analytics import (
 from app.schemas.ai import AIResultOut
 from app.services.ai import log as ai_log
 from app.services.ai.factory import get_ai_service
+from app.services.message_metrics import accepted_message, real_message
 
 router = APIRouter(prefix="/analytics", tags=["analytics"])
 
@@ -91,6 +92,7 @@ def overview(
     messages_sent = _count(
         db, Message, Message.workspace_id == ws,
         Message.direction == MessageDirection.outbound, Message.created_at >= since,
+        accepted_message(),
     )
     replies = _count(
         db, Message, Message.workspace_id == ws,
@@ -162,7 +164,8 @@ def _event_counts(db: Session, ws: str, since: datetime, *, per_channel: bool):
             func.count(func.distinct(MessageEvent.message_id)),
         )
     j = j.join(Message, Message.id == MessageEvent.message_id).where(
-        MessageEvent.workspace_id == ws, MessageEvent.created_at >= since
+        MessageEvent.workspace_id == ws, Message.workspace_id == ws, MessageEvent.created_at >= since,
+        real_message(),
     )
     j = j.group_by(Message.channel, MessageEvent.type) if per_channel else j.group_by(MessageEvent.type)
     return db.execute(j).all()
@@ -182,6 +185,7 @@ def outreach(
         select(Message.channel, func.count()).where(
             Message.workspace_id == ws, Message.direction == MessageDirection.outbound,
             Message.created_at >= since,
+            accepted_message(),
         ).group_by(Message.channel)
     ).all())
 
@@ -251,6 +255,7 @@ def timeseries(
         select(md, func.count()).where(
             Message.workspace_id == ws, Message.direction == MessageDirection.outbound,
             Message.created_at >= start,
+            accepted_message(),
         ).group_by(md)
     ).all())
     reply_by_day = dict(db.execute(
@@ -291,7 +296,8 @@ def campaigns_performance(
     ).all())
     sent = dict(db.execute(
         select(Message.campaign_id, func.count()).where(
-            Message.campaign_id.in_(ids), Message.direction == MessageDirection.outbound
+            Message.campaign_id.in_(ids), Message.direction == MessageDirection.outbound,
+            accepted_message(),
         ).group_by(Message.campaign_id)
     ).all())
     inbound = dict(db.execute(
@@ -302,7 +308,7 @@ def campaigns_performance(
     opened = dict(db.execute(
         select(Message.campaign_id, func.count(func.distinct(MessageEvent.message_id)))
         .join(Message, Message.id == MessageEvent.message_id)
-        .where(Message.campaign_id.in_(ids), MessageEvent.type == MessageEventType.opened)
+        .where(Message.campaign_id.in_(ids), MessageEvent.type == MessageEventType.opened, real_message())
         .group_by(Message.campaign_id)
     ).all())
     bounced = dict(db.execute(

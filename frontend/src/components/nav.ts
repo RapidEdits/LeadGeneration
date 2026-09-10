@@ -13,6 +13,7 @@ export interface NavItem {
 
 export const NAV: NavItem[] = [
   { title: "Overview", href: "/dashboard", icon: LayoutDashboard },
+  { title: "Find leads", href: "/prospecting", icon: Sparkles },
   { title: "Leads", href: "/leads", icon: Users },
   { title: "Companies", href: "/companies", icon: Building2 },
   { title: "Pipeline", href: "/pipeline", icon: KanbanSquare },

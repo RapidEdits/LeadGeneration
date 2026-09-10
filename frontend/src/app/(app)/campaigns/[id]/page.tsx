@@ -22,6 +22,7 @@ import {
 import { CampaignStateBadge } from "@/components/campaign-state-badge";
 import { CampaignBuilder } from "@/components/campaign-builder";
 import { AddLeadsToCampaign } from "@/components/add-leads-to-campaign";
+import { EmailAnalytics } from "@/components/email-analytics";
 import { api, ApiError } from "@/lib/api";
 import { formatDate } from "@/lib/utils";
 import type { CampaignLeadState, Channel } from "@/lib/types";
@@ -254,6 +255,7 @@ export default function CampaignDetailPage() {
           <TabsTrigger value="sequence">Sequence</TabsTrigger>
           <TabsTrigger value="leads">Leads {st ? `(${st.total})` : ""}</TabsTrigger>
           <TabsTrigger value="activity">Activity</TabsTrigger>
+          <TabsTrigger value="email-insights">Email insights</TabsTrigger>
         </TabsList>
 
         {/* Sequence */}
@@ -393,6 +395,7 @@ export default function CampaignDetailPage() {
             </p>
           )}
         </TabsContent>
+        <TabsContent value="email-insights"><EmailAnalytics campaignId={id} /></TabsContent>
       </Tabs>
 
       {/* Edit dialog (reuses the campaign builder in edit mode) */}

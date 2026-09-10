@@ -1,5 +1,8 @@
 import type {
   AIGeneration,
+  ProductProfile,
+  DiscoveryRun,
+  EmailMetrics,
   AIResult,
   AIStatus,
   AnalyticsOutreach,
@@ -134,6 +137,18 @@ async function upload<T>(path: string, form: FormData): Promise<T> {
 }
 
 export const api = {
+  productProfile: () => request<{ profile: ProductProfile | null; search_configured: boolean }>("/prospecting/profile"),
+  saveProductProfile: (body: ProductProfile) => request("/prospecting/profile", { method: "PUT", body: JSON.stringify(body) }),
+  saveSearchKey: (api_key: string) => request<void>("/prospecting/search-key", { method: "PUT", body: JSON.stringify({ api_key }) }),
+  discoveryRuns: () => request<DiscoveryRun[]>("/prospecting/runs"),
+  discover: (mode: "search" | "websites", websites: string[]) => request<DiscoveryRun>("/prospecting/runs", {
+    method: "POST", body: JSON.stringify({ mode, websites }),
+  }),
+  importProspects: (id: string, candidate_ids: string[], campaign_id?: string) =>
+    request<{ created: number; duplicates: number; suppressed: number; added: number; lead_ids: string[] }>(
+      `/prospecting/runs/${id}/import`, { method: "POST", body: JSON.stringify({ candidate_ids, campaign_id }) }),
+  emailMetrics: (days = 30, campaignId?: string) => request<EmailMetrics>(
+    `/analytics/email?days=${days}${campaignId ? `&campaign_id=${encodeURIComponent(campaignId)}` : ""}`),
   // Auth
   signup: (body: {
     email: string;
@@ -229,7 +244,7 @@ export const api = {
     }),
 
   // Inbox (Phase 3)
-  inbox: () => request<InboxItem[]>("/inbox"),
+  inbox: (params: Record<string, string> = {}) => request<InboxItem[]>(`/inbox?${new URLSearchParams(params)}`),
   pollInbox: () =>
     request<{ outcomes: Record<string, number> }>("/inbox/poll", { method: "POST" }),
 

@@ -62,6 +62,9 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: str = ""
     AI_MODEL: str = "gemma-4-31b-it"
 
+    # ---- Public business discovery ----
+    BRAVE_SEARCH_API_KEY: str = ""
+
     # ---- Email (Phase 3) ----
     # Where public tracking/unsubscribe/OAuth-callback endpoints are reachable from the
     # outside world (a lead's mail client, Google/Microsoft). In dev this is the backend

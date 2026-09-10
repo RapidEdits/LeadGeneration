@@ -140,6 +140,11 @@ def process_member(db: Session, member: CampaignLead, now: datetime | None = Non
             return "skipped_suppressed"
         # Transient → back off and retry, up to a cap.
         if any(r in _TRANSIENT for r in decision.reasons):
+            # Waiting for a daily budget or sending window is normal bulk scheduling,
+            # not a failed provider attempt. Large batches may legitimately span days.
+            if set(decision.reasons) <= {"frequency_ok", "rate_limit_ok", "schedule_ok"}:
+                member.next_action_at = now + RETRY_BACKOFF
+                return f"deferred_{member.last_reason}"
             member.attempts += 1
             if member.attempts >= MAX_ATTEMPTS:
                 member.state = CampaignLeadState.failed
@@ -325,7 +330,9 @@ def tick(db: Session, now: datetime | None = None, limit: int = 200) -> dict:
     """Process all members that are due. Returns a small outcome histogram."""
     now = now or datetime.now(timezone.utc)
     active_campaign_ids = db.execute(
-        select(Campaign.id).where(Campaign.state == CampaignState.active)
+        # ponytail: lock the selected campaigns for this tick; partition batches if
+        # throughput later requires it. Concurrent beat/on-demand ticks skip them.
+        select(Campaign.id).where(Campaign.state == CampaignState.active).with_for_update(skip_locked=True)
     ).scalars().all()
     if not active_campaign_ids:
         return {}

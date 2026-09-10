@@ -207,7 +207,34 @@ export interface InboxItem {
   lead_id: string | null;
   lead_name: string | null;
   campaign_id: string | null;
+  campaign_name: string | null;
+  direction: "inbound" | "outbound";
+  status: string;
+  to_address: string | null;
+  events: { type: string; created_at: string; provenance: string; error: string | null }[];
   created_at: string;
+}
+
+export interface ProductProfile {
+  name: string; overview: string; website: string; target_customer: string;
+  locations: string[]; country_code: string; max_leads: number;
+  radius_km: number | null; latitude: number | null; longitude: number | null;
+}
+export interface ProspectCandidate {
+  id: string; company: string; website: string; email: string; source_url: string;
+  location: string; location_evidence: string; location_source: string;
+  distance_km: number | null; score: number; reason: string;
+  ai_score: number | null; ai_reason: string | null; lead_id: string | null; observed_at: string;
+}
+export interface DiscoveryRun {
+  id: string; created_at: string; status: "queued" | "running" | "completed" | "failed";
+  profile: ProductProfile; candidates: ProspectCandidate[]; warnings: string[];
+  sites_total: number; sites_scanned: number; filtered: number; queries: string[]; error: string | null;
+}
+export interface EmailMetrics {
+  campaign_id: string | null; days: number; definition: string;
+  totals: Record<string, number>; rates: Record<string, number>;
+  points: ({ date: string } & Record<string, number | string>)[];
 }
 
 // ---- LinkedIn assisted workflow (Phase 5) ----

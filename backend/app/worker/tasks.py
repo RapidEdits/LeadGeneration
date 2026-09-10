@@ -48,3 +48,10 @@ def poll_inbound(self):
 @celery_app.task(name="health.ping")
 def ping() -> str:
     return "pong"
+
+
+@celery_app.task(name="prospecting.discover", soft_time_limit=600, time_limit=660)
+def discover_prospects(run_id: str):
+    from app.services.prospecting import execute_run
+    with SessionLocal() as db:
+        execute_run(db, run_id)

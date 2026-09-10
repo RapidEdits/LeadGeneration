@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PageHeader } from "@/components/page-header";
+import { EmailAnalytics } from "@/components/email-analytics";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -125,6 +126,7 @@ export default function AnalyticsPage() {
         </div>
       </PageHeader>
 
+      <EmailAnalytics />
       <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
         <Metric icon={Users} label="Total leads" value={o?.total_leads ?? 0}
           hint={o ? `+${o.new_leads} in ${days}d` : undefined} loading={overview.isLoading} />

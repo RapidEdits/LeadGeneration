@@ -12,9 +12,21 @@ import { formatDate } from "@/lib/utils";
 
 export default function InboxPage() {
   const qc = useQueryClient();
-  const { data, isLoading } = useQuery({
-    queryKey: ["inbox"],
-    queryFn: () => api.inbox(),
+  const [campaignId, setCampaignId] = React.useState("");
+  const [direction, setDirection] = React.useState("inbound");
+  const [channel, setChannel] = React.useState("email");
+  const [status, setStatus] = React.useState("");
+  const [offset, setOffset] = React.useState(0);
+  React.useEffect(() => {
+    const campaign = new URLSearchParams(window.location.search).get("campaign");
+    if (campaign) { setCampaignId(campaign); setDirection("outbound"); }
+  }, []);
+  const campaigns = useQuery({ queryKey: ["campaigns"], queryFn: api.listCampaigns });
+  const { data, isLoading, error } = useQuery({
+    queryKey: ["inbox", campaignId, direction, channel, status, offset],
+    queryFn: () => api.inbox({ direction, offset: String(offset), limit: "50",
+      ...(campaignId ? { campaign_id: campaignId } : {}), ...(channel ? { channel } : {}),
+      ...(status ? { message_status: status } : {}) }),
     refetchInterval: 15000,
   });
   const [polling, setPolling] = React.useState(false);
@@ -42,12 +54,20 @@ export default function InboxPage() {
 
   return (
     <div>
-      <PageHeader title="Inbox" description="Replies and inbound messages across your campaigns">
+      <PageHeader title="Campaign mail" description="Organize sent mail and replies by campaign, and inspect each message's activity.">
         <Button variant="outline" onClick={poll} disabled={polling}>
           {polling ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
           Poll now
         </Button>
       </PageHeader>
+
+      <div className="mb-5 flex flex-wrap gap-3">
+        <select aria-label="Mailbox campaign" className="max-w-80 rounded-md border bg-background px-3 py-2 text-sm" value={campaignId} onChange={e => { setCampaignId(e.target.value); setOffset(0); }}><option value="">All campaigns</option>{campaigns.data?.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}</select>
+        <select aria-label="Message direction" className="rounded-md border bg-background px-3 py-2 text-sm" value={direction} onChange={e => { setDirection(e.target.value); setStatus(""); setOffset(0); }}><option value="inbound">Replies / inbound</option><option value="outbound">Sent / outbound</option></select>
+        <select aria-label="Message channel" className="rounded-md border bg-background px-3 py-2 text-sm" value={channel} onChange={e => { setChannel(e.target.value); setOffset(0); }}><option value="email">Email</option><option value="">All channels</option><option value="whatsapp">WhatsApp</option><option value="linkedin">LinkedIn</option></select>
+        <select aria-label="Message status" className="rounded-md border bg-background px-3 py-2 text-sm" value={status} onChange={e => { setStatus(e.target.value); setOffset(0); }}><option value="">All statuses</option>{["sent", "delivered", "opened", "replied", "bounced", "failed", "queued", "simulated"].map(s => <option key={s} value={s}>{s}</option>)}</select>
+      </div>
+      {error && <p role="alert" className="mb-4 text-sm text-destructive">Could not load mail: {error.message}</p>}
 
       {isLoading ? (
         <div className="text-sm text-muted-foreground">Loading…</div>
@@ -58,9 +78,7 @@ export default function InboxPage() {
               <InboxIcon className="h-6 w-6 text-accent-foreground" />
             </div>
             <p className="max-w-md text-sm text-muted-foreground">
-              No replies yet. When a lead responds to a campaign email, it lands here and their
-              sequence is paused automatically. Connected accounts are polled every couple of
-              minutes — or click <span className="font-medium">Poll now</span>.
+              No messages match these filters. Choose a campaign and switch between outbound mail and replies.
             </p>
           </CardContent>
         </Card>
@@ -72,7 +90,7 @@ export default function InboxPage() {
               <div className="min-w-0 flex-1">
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-medium">
-                    {m.lead_name || m.from_address || "Unknown sender"}
+                    {m.lead_name || (m.direction === "outbound" ? m.to_address : m.from_address) || "Unknown contact"}
                   </span>
                   {m.from_address && m.lead_name && (
                     <span className="text-xs text-muted-foreground">{m.from_address}</span>
@@ -80,9 +98,10 @@ export default function InboxPage() {
                   <span className="ml-auto text-xs text-muted-foreground">{formatDate(m.created_at)}</span>
                 </div>
                 <div className="mt-0.5 truncate text-sm">{m.subject || "(no subject)"}</div>
-                {m.body && (
-                  <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{m.body}</p>
-                )}
+                <div className="mt-1 flex flex-wrap gap-2 text-xs text-muted-foreground"><span className="capitalize">{m.channel} · {m.status}</span>{m.campaign_id ? <Link href={`/campaigns/${m.campaign_id}`} className="text-primary hover:underline">{m.campaign_name || "Campaign"}</Link> : <span>Unassigned</span>}</div>
+                <details className="mt-2 text-sm"><summary className="cursor-pointer text-primary">Read message & activity</summary><p className="mt-2 whitespace-pre-wrap break-words text-muted-foreground">{m.body || "(empty message)"}</p>
+                  <ol className="mt-3 space-y-1 border-l pl-3 text-xs text-muted-foreground">{m.events.map((event, i) => <li key={i}>{formatDate(event.created_at)} · {event.type} ({event.provenance}){event.error ? ` — ${event.error}` : ""}</li>)}</ol>
+                </details>
                 {m.lead_id && (
                   <Link href="/leads" className="mt-1 inline-block text-xs text-primary hover:underline">
                     View lead
@@ -93,6 +112,7 @@ export default function InboxPage() {
           ))}
         </div>
       )}
+      <div className="mt-4 flex items-center justify-between"><Button variant="outline" disabled={offset === 0 || isLoading} onClick={() => setOffset(o => Math.max(0, o - 50))}>Previous</Button><span className="text-xs text-muted-foreground">Page {offset / 50 + 1} · {items.length} messages</span><Button variant="outline" disabled={items.length < 50 || isLoading} onClick={() => setOffset(o => o + 50)}>Next</Button></div>
     </div>
   );
 }

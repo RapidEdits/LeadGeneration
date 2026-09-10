@@ -123,3 +123,63 @@ branding is surfaced to end users.
 9. Production — security audit, rate limits, monitoring, tests, deployment, docs
 
 > New here? Read **[docs/HOW-TO-GUIDE.md](docs/HOW-TO-GUIDE.md)** for a plain-English walkthrough.
+
+## Product prospecting → campaign email
+
+Open **Find leads** in the sidebar. Save your product name, overview, website,
+ideal-customer keywords and locations (separate locations with semicolons).
+Select a result limit from 1–100. Optional radius targeting takes a center latitude,
+longitude and radius in kilometers.
+
+**Search the web** uses Brave Search. An admin can save an encrypted workspace key
+in the tab, or an operator can set `BRAVE_SEARCH_API_KEY` in `.env` and recreate the
+backend/worker. Provider quota and usage charges apply; API documentation:
+https://api-dashboard.search.brave.com/app/documentation/web-search.
+**Supply websites** accepts up to 40 business URLs without a search key.
+
+Discovery runs in the existing Celery worker and persists its progress and results.
+It inspects at most 40 business sites, with up to two linked contact/about/location
+pages per site, honors robots rules, bounds redirects/downloads, and blocks local,
+private and reserved network destinations. The product website is read for context.
+Only observed emails on the business's own domain are proposed. No email addresses
+are guessed. Javascript-only sites, obfuscated emails and inaccessible pages may
+produce no contacts. This is bounded public-web discovery, not exhaustive coverage
+of the internet. Radius mode excludes sites without published geographic coordinates;
+text-location mode shows matching page excerpts for manual review.
+
+Results show keyword fit and source URLs, plus optional AI fit when the existing AI
+service is configured. Public page text remains untrusted evidence, never an
+instruction to the application. Keyword fit does not guarantee a good customer.
+Review selected contacts, then save them to Leads, enroll them in a draft/paused
+campaign, or create a new draft email campaign directly. Imports reuse existing
+emails, honor suppression and preserve the source evidence. New campaigns start
+in test mode with a 50-email daily limit. Review the subject/body in Campaigns,
+connect a sending account in Settings, switch to live mode, and launch when ready.
+The existing campaign engine handles bulk sends and sequence delays; normal waits
+for daily limits or schedule windows no longer exhaust provider-failure retries.
+Concurrent ticks lock campaigns to prevent overlapping processing.
+
+**Inbox / Campaign mail** filters outbound messages and replies by campaign,
+channel and status, with pagination, full bodies and message event history.
+**Analytics → Email campaign insights** and each campaign's **Email insights** tab
+show accepted sends, confirmed deliveries, unique opens/clicks/replies,
+bounces, failures, queued/simulated messages and unsubscribes. Interactive daily
+charts and an accessible data table cover 7/30/90/180-day windows.
+
+Reports use the cohort of outbound emails created in the chosen UTC date range,
+with engagement observed through now. A repeated open/click/reply counts once per
+outbound email. Sent means the provider accepted the email; delivery is only counted
+when explicitly confirmed. Opens/clicks can be affected by privacy features and
+automated scanners. Tracking requires `PUBLIC_BASE_URL` to be a reachable HTTPS
+address; inbound replies require a connected/pollable mailbox. Simulations and
+failed/queued records are excluded from real-send metrics.
+
+No new runtime dependency or database migration is required: product profiles and
+bounded discovery runs reuse the existing workspace-scoped `lead_sources` JSONB
+storage. Start/restart the backend, frontend, worker and beat after updating the code.
+
+Verification (uses the isolated `_test` database, disables external AI and broker dispatch):
+```bash
+docker compose exec -T -e AI_PROVIDER=null -e CELERY_BROKER_URL=memory:// backend pytest -ra
+docker compose run --rm --no-deps frontend npm run build
+```
